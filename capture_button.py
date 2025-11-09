@@ -10,10 +10,10 @@ import cv2
 import pyrealsense2 as rs
 
 # -------- Settings --------
-IMAGE_DIR = "."                 # where to save images
-NAME_PATTERN = "capture_{}.png" # file name pattern
-FLAG = "/tmp/snap.flag"         # file that triggers a capture from the BT script
-WARMUP_FRAMES = 10              # let auto-exposure settle
+IMAGE_DIR = "."                 # Where to save images
+NAME_PATTERN = "capture_{}.png" # File name pattern
+FLAG = "/tmp/snap.flag"         # BT script drops this file to trigger a capture
+WARMUP_FRAMES = 10              # Let auto-exposure settle
 # --------------------------
 
 def next_index():
@@ -47,8 +47,7 @@ def snap_and_save(pipeline, idx):
     fname = os.path.join(IMAGE_DIR, NAME_PATTERN.format(idx))
     cv2.imwrite(fname, img)
     try:
-        # convenience for the BT script if it wants a stable path
-        cv2.imwrite("/tmp/capture_latest.png", img)
+        cv2.imwrite("/tmp/capture_latest.png", img)  # handy stable path
     except Exception:
         pass
     print(f"{os.path.basename(fname)} saved on Raspberry Pi!")
@@ -61,18 +60,17 @@ def main():
         img_counter = next_index()
 
         print("Press ENTER to capture an image,")
-        print(f"or create the flag {FLAG} (Bluetooth script does this). Ctrl+C to quit.")
+        print(f"or trigger via {FLAG} (set by bt_bridge.py). Ctrl+C to quit.")
 
         while True:
             # 1) Flag trigger from Bluetooth script
             if os.path.exists(FLAG):
                 try:
-                    os.remove(FLAG)
+                    os.remove(FLAG)   # IMPORTANT: delete the flag so we don't loop
                 except Exception:
                     pass
                 if snap_and_save(pipeline, img_counter):
                     img_counter += 1
-                # loop again
                 continue
 
             # 2) Non-blocking stdin check for keyboard ENTER
@@ -81,7 +79,6 @@ def main():
                 _ = sys.stdin.readline()  # consume line
                 if snap_and_save(pipeline, img_counter):
                     img_counter += 1
-            # tiny sleep to keep CPU calm
             time.sleep(0.02)
 
     except KeyboardInterrupt:
