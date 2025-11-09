@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>City Heatmap</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        #map {
+            flex: 1;
+        }
+        #sidebar {
+            width: 300px;
+            background-color: #1a1a1a;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        #sidebar h2 {
+            margin-top: 0;
+            border-bottom: 2px solid #444;
+            padding-bottom: 10px;
+        }
+        .info-section {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+        }
+        .info-section h3 {
+            margin-top: 0;
+            color: #ff6b6b;
+        }
+        .info-label {
+            color: #999;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        .info-value {
+            font-size: 1.1em;
+            margin-top: 5px;
+        }
+        .analysis-section {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+            border-left: 3px solid #4a9eff;
+        }
+        .analysis-section h3 {
+            margin-top: 0;
+            color: #4a9eff;
+        }
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+        .analysis-text {
+            line-height: 1.6;
+            color: #ddd;
+            white-space: pre-wrap;
+        }
+        .error {
+            color: #ff6b6b;
+        }
+    </style>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <!-- Heatmap.js + Leaflet plugin -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/heatmap.js/2.0.5/heatmap.min.js"></script>
+    <script src="https://unpkg.com/leaflet-heatmap/leaflet-heatmap.js"></script>
+</head>
+<body>
+    <div id="container">
+        <div id="map"></div>
+        <div id="sidebar">
+            <h2>Urban Eyes Princeton Analysis</h2>
+            <p>Click on any marker to view details.</p>
+        </div>
+    </div>
+
+<script>
+    const map = L.map("map");
+
+    // OpenStreetMap tiles
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19
+    }).addTo(map);
+
+    // User location marker
+    map.locate({ setView: true, maxZoom: 14 });
+
+    map.on("locationfound", (e) => {
+        L.circleMarker(e.latlng, {
+            radius: 6,
+            color: "blue",
+            fillColor: "blue",
+            fillOpacity: 0.6
+        }).addTo(map).bindPopup("You are here");
+    });
+
+    // Helper function to update sidebar with AI analysis
+    async function updateSidebar(category, time, lat, lng, intensity) {
+        const sidebar = document.getElementById("sidebar");
+        
+        // Show initial info with loading state
+        sidebar.innerHTML = `
+            <h2>Urban Eyes Princeton Analysis</h2>
+            <div class="info-section">
+                <h3>${category}</h3>
+                
+                <div class="info-label">Time</div>
+                <div class="info-value">${time}</div>
+                
+                <div class="info-label">Location</div>
+                <div class="info-value">Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}</div>
+                
+                <div class="info-label">Intensity</div>
+                <div class="info-value">${intensity}</div>
+            </div>
+            
+            <div class="analysis-section">
+                <h3>xAI Analysis</h3>
+                <div class="loading">Analyzing incident data...</div>
+            </div>
+        `;
+        
+        // Call the analysis endpoint
+        try {
+            const response = await fetch('/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    category: category,
+                    time: time,
+                    lat: lat,
+                    lng: lng,
+                    intensity: intensity,
+                    area: "Princeton, NJ"
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Update with analysis results
+                sidebar.innerHTML = `
+                    <h2>Urban Eyes Princeton Analysis</h2>
+                    <div class="info-section">
+                        <h3>${category}</h3>
+                        
+                        <div class="info-label">Time</div>
+                        <div class="info-value">${time}</div>
+                        
+                        <div class="info-label">Location</div>
+                        <div class="info-value">Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}</div>
+                        
+                        <div class="info-label">Intensity</div>
+                        <div class="info-value">${intensity}</div>
+                    </div>
+                    
+                    <div class="analysis-section">
+                        <h3>AI Analysis (${data.api_used})</h3>
+                        <div class="analysis-text">${data.analysis}</div>
+                    </div>
+                `;
+            } else {
+                throw new Error(data.error || 'Analysis failed');
+            }
+        } catch (error) {
+            console.error('Analysis error:', error);
+            // Update sidebar with error message
+            const infoSection = sidebar.querySelector('.info-section');
+            if (infoSection) {
+                sidebar.innerHTML = `
+                    <h2>Urban Eyes Princeton Analysis</h2>
+                    ${infoSection.outerHTML}
+                    
+                    <div class="analysis-section">
+                        <h3>AI Analysis</h3>
+                        <div class="error">
+                            Unable to load analysis: ${error.message}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    // Fetch and display markers
+    fetch("/data")
+        .then(r => r.json())
+        .then(geojson => {
+            geojson.features.forEach(f => {
+                const { category, time, intensity } = f.properties;
+                const [lng, lat] = f.geometry.coordinates;
+
+                const marker = L.circleMarker([lat, lng], {
+                    radius: intensity*2,
+                    color: "red",
+                    fillColor: "red",
+                    fillOpacity: 0.6
+                }).addTo(map);
+
+                // 1) Popup on map
+                marker.bindPopup(`<b>${category}</b><br>${time}`);
+
+                // 2) On click, update sidebar
+                marker.on("click", () => {
+                    updateSidebar(category, time, lat, lng, intensity);
+                });
+            });
+        });
+
+</script>
+
+</body>
+</html>

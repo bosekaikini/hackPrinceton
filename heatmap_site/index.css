@@ -1,0 +1,26 @@
+body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+}
+
+#container {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* Map gets remaining space */
+#map {
+    flex: 1;
+}
+
+/* Sidebar stays fixed width */
+#sidebar {
+    width: 300px;
+    background: #111;
+    color: white;
+    padding: 20px;
+    box-sizing: border-box;
+    overflow-y: auto;
+}
