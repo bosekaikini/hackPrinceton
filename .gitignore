@@ -1,0 +1,11 @@
+# Ignore virtual environment directory
+hackprinceton_env/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyd
+
+# Ignore local development files
+.env
+.DS_Store
