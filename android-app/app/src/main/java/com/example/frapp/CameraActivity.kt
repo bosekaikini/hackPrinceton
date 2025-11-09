@@ -58,7 +58,7 @@ private val MY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34F
 
 // MAC address of your paired Raspberry Pi (Your value is used here)
 // Change this line in your CameraActivity.kt file
-private const val RASPBERRY_PI_MAC_ADDRESS = "DC:A6:32:4C:CC:AC" // <-- Changed to UPPECASE
+private const val RASPBERRY_PI_MAC_ADDRESS = "DC:A6:32:4C:CC:AC" // <-- Changed to UPPERCASE
 private const val SIGNAL_MESSAGE = "TAKE_PICTURE_SIGNAL\n"
 
 // Replace with the actual URL for your image categorization API
@@ -308,69 +308,83 @@ class CameraActivity : ComponentActivity() {
     private fun connectAndSendSignal() {
         CoroutineScope(Dispatchers.IO).launch {
             var socket: BluetoothSocket? = null
-            var receivedImageData: ByteArray? = null // Change to nullable ByteArray
+            var receivedImageData: ByteArray? = null
             try {
-                // 1. Bluetooth Connection and Signal Send
+                // 1) Connect & send trigger
                 val device: BluetoothDevice =
-                    bluetoothAdapter!!.getRemoteDevice(RASPBERRY_PI_MAC_ADDRESS.uppercase()) // Force uppercase for safety
-                socket = device.createRfcommSocketToServiceRecord(MY_UUID)
-                bluetoothAdapter.cancelDiscovery()
+                    bluetoothAdapter!!.getRemoteDevice(RASPBERRY_PI_MAC_ADDRESS.uppercase())
+                //socket = device.createRfcommSocketToServiceRecord(MY_UUID)
+                socket = device.createInsecureRfcommSocketToServiceRecord(MY_UUID)
+                bluetoothAdapter?.cancelDiscovery()
                 socket.connect()
                 socket.outputStream.write(SIGNAL_MESSAGE.toByteArray())
                 Log.d("BT_COMM", "Signal sent: $SIGNAL_MESSAGE")
 
-                // 2. RECEIVE IMAGE DATA (Protocol: 4-byte size header + Body)
+                // 2) Receive image (protocol: 4-byte big-endian size + body)
                 val inputStream = socket.inputStream
 
-                // Read 4-byte header
                 val sizeHeader = ByteArray(4)
                 var bytesRead = inputStream.read(sizeHeader)
-                if (bytesRead != 4) {
-                    throw IOException("Failed to read image size header.")
-                }
+                if (bytesRead != 4) throw IOException("Failed to read image size header.")
 
-                // Convert 4 bytes to an integer (Big-Endian/Network Byte Order)
-                val imageSize =
-                    java.nio.ByteBuffer.wrap(sizeHeader).order(java.nio.ByteOrder.BIG_ENDIAN)
-                        .getInt()
+                val imageSize = java.nio.ByteBuffer.wrap(sizeHeader)
+                    .order(java.nio.ByteOrder.BIG_ENDIAN).getInt()
 
                 if (imageSize <= 0) {
-                    // This signals an error/failure from the Pi
-                    val errorBuffer = ByteArray(100)
-                    val errorBytes = inputStream.read(errorBuffer)
-                    val errorMessage = if (errorBytes > 0) String(
-                        errorBuffer,
-                        0,
-                        errorBytes
-                    ) else "Unknown Pi Error"
-                    throw IOException("Pi failed to capture image. Error: $errorMessage")
+                    // read optional error text
+                    val buf = ByteArray(256)
+                    val n = inputStream.read(buf)
+                    val msg = if (n > 0) String(buf, 0, n) else "Unknown Pi Error"
+                    throw IOException("Pi failed to capture image. Error: $msg")
                 }
 
-                // Read the image body
                 receivedImageData = ByteArray(imageSize)
-                var totalBytesRead = 0
-                while (totalBytesRead < imageSize) {
-                    bytesRead = inputStream.read(
-                        receivedImageData,
-                        totalBytesRead,
-                        imageSize - totalBytesRead
-                    )
-                    if (bytesRead == -1) {
-                        throw IOException("Connection closed prematurely while reading image body.")
-                    }
-                    totalBytesRead += bytesRead
+                var total = 0
+                while (total < imageSize) {
+                    bytesRead = inputStream.read(receivedImageData!!, total, imageSize - total)
+                    if (bytesRead == -1) throw IOException("Socket closed while reading image body.")
+                    total += bytesRead
                 }
-                Log.d("BT_COMM", "Successfully received image body: $totalBytesRead bytes.")
+                Log.d("BT_COMM", "Received image: $total bytes")
 
+                // 3) If we have image bytes: SAVE to Photos, then continue pipeline
+                if (receivedImageData != null && receivedImageData!!.isNotEmpty()) {
 
-                // 3. PROCESS DATA (Only if image was received)
-                if (receivedImageData.isNotEmpty()) {
-                    val categorization = categorizeImage(receivedImageData)
+                    // --- Save to Photos (Pictures/UrbanSight) ---
+                    val resolver = applicationContext.contentResolver
+                    val fileName = "urbansight_${System.currentTimeMillis()}.png"
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/UrbanSight")
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
+                    }
+
+                    val uri = resolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                    )
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { out ->
+                            out.write(receivedImageData)
+                        }
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            values.clear()
+                            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                            resolver.update(uri, values, null, null)
+                        }
+                        Log.d("BT_COMM", "Saved image to $uri")
+                    } else {
+                        Log.e("BT_COMM", "Failed to create MediaStore entry for image")
+                    }
+
+                    // --- Continue with your pipeline ---
+                    val categorization = categorizeImage(receivedImageData!!)
                     val location = getCurrentLocation()
                     val timestamp = LocalDateTime.now()
                         .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
 
-                    // 4. PACKAGE AND SEND JSON
                     val metaData = ImageMetaData(
                         categorization = categorization,
                         latitude = location.latitude,
@@ -379,20 +393,17 @@ class CameraActivity : ComponentActivity() {
                     )
                     sendMetaDataToServer(metaData)
 
-                    // 5. NAVIGATION (Pass the image data and metadata to ProfileActivity)
-                    val intent =
-                        android.content.Intent(this@CameraActivity, ProfileActivity::class.java)
-                            .apply {
-                                putExtra("IMAGE_DATA", receivedImageData) // Pass the image bytes
-                                putExtra("CATEGORIZATION", categorization)  // Pass metadata
-                                // Add other metadata if needed
-                            }
+                    val intent = android.content.Intent(this@CameraActivity, ProfileActivity::class.java)
+                        .apply {
+                            putExtra("IMAGE_DATA", receivedImageData) // pass image bytes
+                            putExtra("CATEGORIZATION", categorization)
+                        }
                     startActivity(intent)
 
                     runOnUiThread {
                         Toast.makeText(
                             this@CameraActivity,
-                            "Data processed, sent to server, and navigated!",
+                            "Saved to Photos (Pictures/UrbanSight) and processed.",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -406,7 +417,6 @@ class CameraActivity : ComponentActivity() {
                     }
                 }
 
-
             } catch (e: Exception) {
                 Log.e("BT_COMM", "Full process failed: ${e.message}")
                 runOnUiThread {
@@ -417,12 +427,7 @@ class CameraActivity : ComponentActivity() {
                     ).show()
                 }
             } finally {
-                // 6. Close the socket
-                try {
-                    socket?.close()
-                } catch (closeException: IOException) {
-                    Log.e("BT_COMM", "Could not close the client socket", closeException)
-                }
+                try { socket?.close() } catch (_: IOException) {}
             }
         }
     }
